@@ -1,0 +1,5 @@
+name: SpicyGarden
+main: spicyrice.SpicyGarden.SpicyGarden
+api-version: 1.15
+version: 1.0
+commands:
