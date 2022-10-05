@@ -3,7 +3,7 @@ use std::thread;
 use std::sync::mpsc;
 use std::time::Duration;
 use std::convert::TryFrom;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 extern crate fs_extra;
 
@@ -18,6 +18,8 @@ struct Seed {
 }
 
 fn run_server(mut target_seed: Seed) -> Seed {
+    println!("Running server {} with seed {}", target_seed.claimed_runner_index.unwrap(), target_seed.seed);
+
     let runner_index = target_seed.claimed_runner_index.unwrap();
     let runner_dir = format!("runners/runner_{}", runner_index);
 
@@ -59,7 +61,9 @@ fn run_server(mut target_seed: Seed) -> Seed {
     // Start the java server in a child process
     let mut server_process: std::process::Child = match Command::new("java")
         .current_dir(runner_dir.clone())
-        .args(["-Xms32M", "-Xmx512M", "-jar", &format!("{}/server.jar", runner_dir.clone()), ])
+        .args(["-Xms32M", "-Xmx512M", "-jar", "server.jar", "nogui"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
         .spawn() {
         Ok(process) => process,
         Err(e) => {
@@ -92,8 +96,7 @@ fn run_server(mut target_seed: Seed) -> Seed {
             Err(e) => {
                 println!("ERROR: Failed while waiting on java process: {:?}", e);
                 return target_seed;
-            }
-
+            },
         }
 
         match timeout_rx.try_recv() {
@@ -105,9 +108,25 @@ fn run_server(mut target_seed: Seed) -> Seed {
         }
     }
  
-    println!("Ran server {} with seed {}", target_seed.claimed_runner_index.unwrap(), target_seed.seed);
+    // Check for results
+    
+    let server_result = match fs::read(format!("{}/SpicyGardenData.txt", runner_dir)) {
+        Ok(result_txt) => result_txt,
+        Err(e) => {
+            println!("ERROR: Unable to read SpicyGardenData.txt on runner {}: {:?}", runner_index, e);
+            return target_seed;
+        },
+    };
 
-    target_seed.result = Some(format!("Test result for seed: {}", target_seed.seed.clone()).to_string());
+    let decoded_server_result = match String::from_utf8(server_result) {
+        Ok(decoded) => decoded,
+        Err(e) => {
+            println!("ERROR: Failed to decode SpicyGardenData.txt on runner {}: {:?}", runner_index, e);
+            return target_seed;
+        }
+    };
+
+    target_seed.result = Some(decoded_server_result);
 
     return target_seed;
 }
@@ -118,7 +137,7 @@ fn main() {
     let gather_server_address = "127.0.0.1:8080";
     let client_key = "test_key";
 
-    let target_runner_count: u32 = 1;
+    let target_runner_count: u32 = 4;
     let mut halted_runners: Vec<u32> = (0..target_runner_count).collect();
 
     let mut seed_pool: Vec<Seed> = vec![];
@@ -232,7 +251,5 @@ fn main() {
         };
 
         completed_seeds.push(received);
-        
-        println!("Looping");
     }
 }
