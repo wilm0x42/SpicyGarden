@@ -1,17 +1,23 @@
 use std::fs;
 use std::thread;
-use std::sync::mpsc;
+use std::sync::{mpsc, atomic};
 use std::time::Duration;
 use std::convert::TryFrom;
 use std::process::{Command, Stdio};
 
 use iced::{executor, Application, Button, Column, Row, Element,
-    Settings, Text, TextInput, Padding};
+    Settings, Text, TextInput, Padding, Subscription};
+extern crate iced_native;
+
 extern crate fs_extra;
 
 mod serverproperties;
 
-static JAVA_TIMEOUT_DURATION: Duration = Duration::from_secs(60);
+// If a server takes this long to complete, then its process will be killed and its seed will be skipped
+const JAVA_TIMEOUT_DURATION: Duration = Duration::from_secs(60);
+
+// All runners will shutdown gracefully when they see this set to true
+static JAVA_THREADS_SHUTDOWN: atomic::AtomicBool = atomic::AtomicBool::new(false);
 
 struct Seed {
     seed: String,
@@ -83,6 +89,16 @@ fn run_server(mut target_seed: Seed) -> Seed {
     });
 
     loop {
+        if JAVA_THREADS_SHUTDOWN.load(atomic::Ordering::Relaxed) {
+            match server_process.kill() {
+                Ok(()) => {
+                    server_process.wait().unwrap(); // Wait to ensure resources are released
+                }
+                Err(_) => () // Process already died
+            };
+            return target_seed;
+        }
+
         match server_process.try_wait() {
             Ok(Some(status)) => {
                 if status.success() {
@@ -104,6 +120,12 @@ fn run_server(mut target_seed: Seed) -> Seed {
         match timeout_rx.try_recv() {
             Ok(_timeout) => {
                 println!("TIMEOUT: Runner {} exceeded timeout, giving up", runner_index);
+                match server_process.kill() {
+                    Ok(()) => {
+                        server_process.wait().unwrap(); // Wait to ensure resources are released
+                    }
+                    Err(_) => () // Process already died
+                };
                 return target_seed;
             },
             Err(_e) => (),
@@ -146,6 +168,19 @@ fn seed_search_loop(gather_server_address: String, client_key: String, target_ru
     let http_client = reqwest::blocking::Client::new();
 
     loop {
+        // If shutdown has been signaled, wait for all runners to complete and then break
+
+        if JAVA_THREADS_SHUTDOWN.load(atomic::Ordering::Relaxed) {
+            while halted_runners.len() < target_runner_count as usize {
+                let received = rx.recv().unwrap_or_else(|error| {
+                    panic!("Thread communication error: {:?}", error);
+                });
+        
+                halted_runners.push(received.claimed_runner_index.unwrap());
+            }
+            break;
+        }
+        
         // Make sure we've got seeds from the gather server in the pool
 
         let seed_pool_count: u32 = u32::try_from(seed_pool.len()).unwrap();
@@ -257,6 +292,8 @@ fn seed_search_loop(gather_server_address: String, client_key: String, target_ru
 enum RunningState {
     Waiting,
     Running,
+    Quitting,
+    Quit,
 }
 
 struct SpicyGarden {
@@ -273,6 +310,8 @@ struct SpicyGarden {
 
     status_message: String,
     running_state: RunningState,
+
+    seed_search_thread: Option<thread::JoinHandle<()>>,
 }
 
 #[derive(Debug, Clone)]
@@ -281,6 +320,8 @@ enum Message {
     ServerAddressChanged(String),
     ClientKeyChanged(String),
     RunnerCountChanged(String),
+    Quit,
+    IgnorableEvent,
 }
 
 impl Application for SpicyGarden {
@@ -304,6 +345,8 @@ impl Application for SpicyGarden {
 
                 status_message: "".to_string(),
                 running_state: RunningState::Waiting,
+
+                seed_search_thread: None,
             },
             iced::Command::none()
         )
@@ -311,6 +354,20 @@ impl Application for SpicyGarden {
 
     fn title(&self) -> String {
         String::from("SpicyGarden - Minecraft Seed Data Collector")
+    }
+
+    fn subscription(&self) -> Subscription<Message> {
+        iced_native::subscription::events().map(|event| {
+            match event {
+                iced_native::Event::Window(window_event) => {
+                    match window_event {
+                        iced_native::window::Event::CloseRequested => Message::Quit,
+                        _ => Message::IgnorableEvent
+                    }
+                }
+                _ => Message::IgnorableEvent
+            }
+        })
     }
 
     fn view(&mut self) -> Element<Self::Message> {
@@ -373,6 +430,13 @@ impl Application for SpicyGarden {
             .align_items(iced::Alignment::Center);
         };
 
+        if self.running_state == RunningState::Quitting {
+            column = column.push(Text::new("Shutting down..."))
+            .padding(Padding::from(8))
+            .spacing(8)
+            .align_items(iced::Alignment::Center)
+        }
+
         Element::from(column)
     }
 
@@ -390,9 +454,9 @@ impl Application for SpicyGarden {
                     }
                 };
 
-                thread::spawn(move || {
+                self.seed_search_thread = Some(thread::spawn(move || {
                     seed_search_loop(server_address, client_key, runner_count);
-                });
+                }));
 
                 self.status_message = "Collecting data...".to_string();
                 self.running_state = RunningState::Running;
@@ -405,14 +469,30 @@ impl Application for SpicyGarden {
             },
             Message::RunnerCountChanged(value) => {
                 self.runner_count = value;
-            }
+            },
+            Message::Quit => {
+                if self.seed_search_thread.is_some() {
+                    let join_handle = self.seed_search_thread.take().unwrap();
+                    self.running_state = RunningState::Quitting;
+                    JAVA_THREADS_SHUTDOWN.store(true, atomic::Ordering::Relaxed);
+                    //TODO: Join this thread in a non-blocking way, such that iced is informed when it's done
+                    join_handle.join().expect("FATAL: Failed to join seed search thread");
+                };
+                self.running_state = RunningState::Quit;
+            },
+            Message::IgnorableEvent => {},
         }
         iced::Command::none()
+    }
+
+    fn should_exit(&self) -> bool {
+        self.running_state == RunningState::Quit
     }
 }
 
 fn main() {
     let mut settings: Settings<()> = Settings::default();
     settings.window.size = (400, 300);
+    settings.exit_on_close_request = false;
     SpicyGarden::run(settings).unwrap();
 }
