@@ -166,6 +166,12 @@ fn seed_search_loop(gather_server_address: String, client_key: String, target_ru
                     continue;
                 },
             };
+
+            if response.status() != 200 {
+                println!("Bad response from seed server: {:?} Retrying in 3s.", response.status());
+                thread::sleep(Duration::from_secs(3));
+                continue;
+            }
                 
             let body_text = response.text().unwrap();
             let assigned_seeds: Vec<&str> = body_text.split("\n").collect();
