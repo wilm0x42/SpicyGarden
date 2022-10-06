@@ -152,7 +152,7 @@ fn seed_search_loop(gather_server_address: String, client_key: String, target_ru
 
         if seed_pool_count < target_runner_count {
             let requested_seed_count = target_runner_count - seed_pool_count;
-            let request_uri = format!("http://{}/assign_seeds/{}/{}",
+            let request_uri = format!("{}/assign_seeds/{}/{}",
                 gather_server_address,
                 client_key,
                 requested_seed_count,
@@ -200,7 +200,7 @@ fn seed_search_loop(gather_server_address: String, client_key: String, target_ru
         while completed_seeds.len() > 0 {
             let seed = completed_seeds.pop().unwrap();
 
-            let request_uri = format!("http://{}/submit_result/{}",
+            let request_uri = format!("{}/submit_result/{}",
                 gather_server_address,
                 client_key,
             );
@@ -281,7 +281,7 @@ impl Application for SpicyGarden {
                 start_button: iced::button::State::new(),
 
                 server_address_input: iced::text_input::State::new(),
-                server_address: "localhost:8080".to_string(),
+                server_address: "http://localhost:8080".to_string(),
 
                 client_key_input: iced::text_input::State::new(),
                 client_key: "test_key".to_string(),
