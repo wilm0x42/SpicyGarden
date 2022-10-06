@@ -5,6 +5,8 @@ use std::time::Duration;
 use std::convert::TryFrom;
 use std::process::{Command, Stdio};
 
+use iced::{executor, Application, Button, Column, Row, Element,
+    Settings, Text, TextInput, Padding};
 extern crate fs_extra;
 
 mod serverproperties;
@@ -131,13 +133,9 @@ fn run_server(mut target_seed: Seed) -> Seed {
     return target_seed;
 }
 
-fn main() {
+fn seed_search_loop(gather_server_address: String, client_key: String, target_runner_count: u32) {
     println!("SpicyGarden by wilm0x42 commit {}", env!("GIT_HASH"));
 
-    let gather_server_address = "127.0.0.1:8080";
-    let client_key = "test_key";
-
-    let target_runner_count: u32 = 4;
     let mut halted_runners: Vec<u32> = (0..target_runner_count).collect();
 
     let mut seed_pool: Vec<Seed> = vec![];
@@ -147,10 +145,7 @@ fn main() {
 
     let http_client = reqwest::blocking::Client::new();
 
-    //fs::create_dir_all("runners").unwrap();
-
     loop {
-
         // Make sure we've got seeds from the gather server in the pool
 
         let seed_pool_count: u32 = u32::try_from(seed_pool.len()).unwrap();
@@ -185,7 +180,6 @@ fn main() {
             }
         }
 
-
         // Spawn new runners if one or more has halted
 
         while halted_runners.len() > 0 {
@@ -200,7 +194,6 @@ fn main() {
                 runner_tx.send(run_server(seed)).unwrap();
             });
         }
-
 
         // Submit completed seeds to the gather server if we have any
 
@@ -252,4 +245,149 @@ fn main() {
 
         completed_seeds.push(received);
     }
+}
+
+struct SpicyGarden {
+    start_button: iced::button::State,
+    
+    server_address_input: iced::text_input::State,
+    server_address: String,
+
+    client_key_input: iced::text_input::State,
+    client_key: String,
+
+    runner_count_input: iced::text_input::State,
+    runner_count: String,
+
+    status_message: String,
+}
+
+#[derive(Debug, Clone)]
+enum Message {
+    StartSeedSearch,
+    ServerAddressChanged(String),
+    ClientKeyChanged(String),
+    RunnerCountChanged(String),
+}
+
+impl Application for SpicyGarden {
+    type Executor = executor::Default;
+    type Message = Message;
+    type Flags = ();
+
+    fn new(_flags: ()) -> (SpicyGarden, iced::Command<Self::Message>) {
+        (
+            SpicyGarden {
+                start_button: iced::button::State::new(),
+
+                server_address_input: iced::text_input::State::new(),
+                server_address: "localhost:8080".to_string(),
+
+                client_key_input: iced::text_input::State::new(),
+                client_key: "test_key".to_string(),
+
+                runner_count_input: iced::text_input::State::new(),
+                runner_count: "4".to_string(),
+
+                status_message: "".to_string(),
+            },
+            iced::Command::none()
+        )
+    }
+
+    fn title(&self) -> String {
+        String::from("SpicyGarden - Minecraft Seed Data Collector")
+    }
+
+    fn view(&mut self) -> Element<Self::Message> {
+        let column = Column::new()
+            .push(Row::new()
+                .push(Text::new("SpicyGarden by wilm0x42").size(32))
+            )
+            .push(Row::new()
+                .push(Text::new("Server address:"))
+                .push(TextInput::new(
+                    &mut self.server_address_input,
+                    "example.com",
+                    &self.server_address,
+                    Message::ServerAddressChanged,
+                    ).padding(Padding::from(8))
+                )
+                .align_items(iced::Alignment::Center)
+                .spacing(8)
+            )
+            .push(Row::new()
+                .push(Text::new("Client key:"))
+                .push(TextInput::new(
+                    &mut self.client_key_input,
+                    "super_secret_key",
+                    &self.client_key,
+                    Message::ClientKeyChanged,
+                    ).padding(Padding::from(8))
+                )
+                .align_items(iced::Alignment::Center)
+                .spacing(8)
+            )
+            .push(Row::new()
+                .push(Text::new("Concurrent server count:"))
+                .push(TextInput::new(
+                    &mut self.runner_count_input,
+                    "4",
+                    &self.runner_count,
+                    Message::RunnerCountChanged,
+                    ).padding(Padding::from(8))
+                )
+                .align_items(iced::Alignment::Center)
+                .spacing(8)
+            )
+            .push(Button::new(&mut self.start_button, Text::new("Start gathering data"))
+                .on_press(Message::StartSeedSearch)
+                .padding(Padding::from(16))
+            )
+            .push(Text::new(self.status_message.clone()))
+            .padding(Padding::from(8))
+            .spacing(8)
+            .align_items(iced::Alignment::Center);
+
+        Element::from(column)
+    }
+
+    fn update(&mut self, message: Self::Message) -> iced::Command<Self::Message> {
+        match message {
+            Message::StartSeedSearch => {
+                let server_address = self.server_address.clone();
+                let client_key = self.client_key.clone();
+
+                let runner_count = match self.runner_count.parse::<u32>() {
+                    Ok(value) => value,
+                    Err(_e) => {
+                        self.status_message = "ERROR: Invalid target runner count".to_string();
+                        return iced::Command::none();
+                    }
+                };
+
+                thread::spawn(move || {
+                    seed_search_loop(server_address, client_key, runner_count);
+                });
+
+                self.status_message = "Collecting data...".to_string();
+            },
+            Message::ServerAddressChanged(value) => {
+                self.server_address = value;
+            },
+            Message::ClientKeyChanged(value) => {
+                self.client_key = value;
+            },
+            Message::RunnerCountChanged(value) => {
+                self.runner_count = value;
+            }
+        }
+        iced::Command::none()
+    }
+}
+
+fn main() {
+    let mut settings: Settings<()> = Settings::default();
+    settings.window.size = (400, 300);
+    SpicyGarden::run(settings).unwrap();
 }
