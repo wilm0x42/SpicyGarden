@@ -253,6 +253,12 @@ fn seed_search_loop(gather_server_address: String, client_key: String, target_ru
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum RunningState {
+    Waiting,
+    Running,
+}
+
 struct SpicyGarden {
     start_button: iced::button::State,
     
@@ -266,6 +272,7 @@ struct SpicyGarden {
     runner_count: String,
 
     status_message: String,
+    running_state: RunningState,
 }
 
 #[derive(Debug, Clone)]
@@ -296,6 +303,7 @@ impl Application for SpicyGarden {
                 runner_count: "4".to_string(),
 
                 status_message: "".to_string(),
+                running_state: RunningState::Waiting,
             },
             iced::Command::none()
         )
@@ -306,11 +314,13 @@ impl Application for SpicyGarden {
     }
 
     fn view(&mut self) -> Element<Self::Message> {
-        let column = Column::new()
+        let mut column = Column::new()
             .push(Row::new()
                 .push(Text::new("SpicyGarden by wilm0x42").size(32))
-            )
-            .push(Row::new()
+            );
+        
+        if self.running_state == RunningState::Waiting {
+            column = column.push(Row::new()
                 .push(Text::new("Server address:"))
                 .push(TextInput::new(
                     &mut self.server_address_input,
@@ -354,6 +364,14 @@ impl Application for SpicyGarden {
             .padding(Padding::from(8))
             .spacing(8)
             .align_items(iced::Alignment::Center);
+        };
+
+        if self.running_state == RunningState::Running {
+            column = column.push(Text::new(self.status_message.clone()))
+            .padding(Padding::from(8))
+            .spacing(8)
+            .align_items(iced::Alignment::Center);
+        };
 
         Element::from(column)
     }
@@ -377,6 +395,7 @@ impl Application for SpicyGarden {
                 });
 
                 self.status_message = "Collecting data...".to_string();
+                self.running_state = RunningState::Running;
             },
             Message::ServerAddressChanged(value) => {
                 self.server_address = value;
