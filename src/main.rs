@@ -288,6 +288,12 @@ fn seed_search_loop(gather_server_address: String, client_key: String, target_ru
     }
 }
 
+// Async wrapper function because async closures aren't stable yet
+// (and the main function doesn't need to all be async)
+async fn seed_search_async_wrapper(server_address: String, client_key: String, runner_count: u32) {
+    seed_search_loop(server_address, client_key, runner_count);
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum RunningState {
     Waiting,
@@ -310,13 +316,12 @@ struct SpicyGarden {
 
     status_message: String,
     running_state: RunningState,
-
-    seed_search_thread: Option<thread::JoinHandle<()>>,
 }
 
 #[derive(Debug, Clone)]
 enum Message {
     StartSeedSearch,
+    StoppedSeedSearch,
     ServerAddressChanged(String),
     ClientKeyChanged(String),
     RunnerCountChanged(String),
@@ -345,8 +350,6 @@ impl Application for SpicyGarden {
 
                 status_message: "".to_string(),
                 running_state: RunningState::Waiting,
-
-                seed_search_thread: None,
             },
             iced::Command::none()
         )
@@ -451,12 +454,13 @@ impl Application for SpicyGarden {
                     }
                 };
 
-                self.seed_search_thread = Some(thread::spawn(move || {
-                    seed_search_loop(server_address, client_key, runner_count);
-                }));
-
                 self.status_message = "Collecting data...".to_string();
                 self.running_state = RunningState::Running;
+
+                return iced::Command::perform(
+                    seed_search_async_wrapper(server_address, client_key, runner_count),
+                    |_| {Message::StoppedSeedSearch}
+                );
             },
             Message::ServerAddressChanged(value) => {
                 self.server_address = value;
@@ -467,15 +471,16 @@ impl Application for SpicyGarden {
             Message::RunnerCountChanged(value) => {
                 self.runner_count = value;
             },
+            Message::StoppedSeedSearch => {
+                self.running_state = RunningState::Quit;
+            },
             Message::Quit => {
-                if self.seed_search_thread.is_some() {
-                    let join_handle = self.seed_search_thread.take().unwrap();
+                if self.running_state == RunningState::Running {
                     self.running_state = RunningState::Quitting;
                     JAVA_THREADS_SHUTDOWN.store(true, atomic::Ordering::Relaxed);
-                    //TODO: Join this thread in a non-blocking way, such that iced is informed when it's done
-                    join_handle.join().expect("FATAL: Failed to join seed search thread");
-                };
-                self.running_state = RunningState::Quit;
+                } else {
+                    self.running_state = RunningState::Quit;
+                }; 
             },
             Message::IgnorableEvent => {},
         }
