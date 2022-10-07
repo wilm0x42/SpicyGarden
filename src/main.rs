@@ -418,24 +418,21 @@ impl Application for SpicyGarden {
                 .padding(Padding::from(16))
             )
             .push(Text::new(self.status_message.clone()))
-            .padding(Padding::from(8))
-            .spacing(8)
-            .align_items(iced::Alignment::Center);
         };
 
         if self.running_state == RunningState::Running {
             column = column.push(Text::new(self.status_message.clone()))
-            .padding(Padding::from(8))
-            .spacing(8)
-            .align_items(iced::Alignment::Center);
         };
 
         if self.running_state == RunningState::Quitting {
             column = column.push(Text::new("Shutting down..."))
+        };
+
+        column = column
             .padding(Padding::from(8))
             .spacing(8)
-            .align_items(iced::Alignment::Center)
-        }
+            .width(iced_native::Length::Fill)
+            .align_items(iced::Alignment::Center);
 
         Element::from(column)
     }
