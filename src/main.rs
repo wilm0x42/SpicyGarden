@@ -13,6 +13,8 @@ extern crate iced_native;
 
 extern crate fs_extra;
 
+use serde::Deserialize;
+
 mod serverproperties;
 
 // If a server takes this long to complete, then its process will be killed and its seed will be skipped
@@ -354,24 +356,32 @@ enum Message {
     IgnorableEvent,
 }
 
+#[derive(Deserialize)]
+#[derive(Default)]
+struct SpicyGardenFlags {
+    server_address: String,
+    client_key: String,
+    runner_count: u32,
+}
+
 impl Application for SpicyGarden {
     type Executor = executor::Default;
     type Message = Message;
-    type Flags = ();
+    type Flags = SpicyGardenFlags;
 
-    fn new(_flags: ()) -> (SpicyGarden, iced::Command<Self::Message>) {
+    fn new(flags: SpicyGardenFlags) -> (SpicyGarden, iced::Command<Self::Message>) {
         (
             SpicyGarden {
                 start_button: iced::button::State::new(),
 
                 server_address_input: iced::text_input::State::new(),
-                server_address: "http://localhost:8080".to_string(),
+                server_address: flags.server_address,
 
                 client_key_input: iced::text_input::State::new(),
-                client_key: "test_key".to_string(),
+                client_key: flags.client_key,
 
                 runner_count_input: iced::text_input::State::new(),
-                runner_count: "4".to_string(),
+                runner_count: flags.runner_count.to_string(),
 
                 status_message: "".to_string(),
                 running_state: RunningState::Waiting,
@@ -523,7 +533,36 @@ impl Application for SpicyGarden {
 }
 
 fn main() {
-    let mut settings: Settings<()> = Settings::default();
+    // Define default initial values
+
+    let mut flags = SpicyGardenFlags {
+        server_address: "".to_string(),
+        client_key: "".to_string(),
+        runner_count: 1,
+    };
+
+    // Load values from config.toml, if possible
+
+    match fs::read("config.toml") {
+        Ok(toml_slice) => {
+            match toml::from_slice::<SpicyGardenFlags>(&toml_slice) {
+                Ok(config) => {
+                    flags = config;
+                },
+                Err(e) => {
+                    println!("ERROR: Failed to parse config.toml: {:?}", e);
+                }
+            }
+        },
+        Err(_) => {
+            println!("Couldn't read config.toml, using default values.");
+        }
+    };
+
+    // Start the GUI
+
+    let mut settings: Settings<SpicyGardenFlags> = Settings::default();
+    settings.flags = flags;
     settings.window.size = (400, 300);
     settings.exit_on_close_request = false;
     SpicyGarden::run(settings).unwrap();
