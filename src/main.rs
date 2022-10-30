@@ -3,7 +3,7 @@ use std::fs;
 use std::process::{Command, Stdio};
 use std::sync::{atomic, mpsc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use iced::{
     executor, Application, Button, Column, Element, Padding, Row, Settings, Subscription, Text,
@@ -185,8 +185,6 @@ fn run_server(mut target_seed: Seed) -> Seed {
 }
 
 fn seed_search_loop(gather_server_address: String, client_key: String, target_runner_count: u32) {
-    println!("SpicyGarden by wilm0x42 commit {}", env!("GIT_HASH"));
-
     let mut halted_runners: Vec<u32> = (0..target_runner_count).collect();
 
     let mut seed_pool: Vec<Seed> = vec![];
@@ -351,6 +349,7 @@ struct SpicyGarden {
     running_state: RunningState,
 
     searched_seed_count: u32,
+    started_running_at: Option<Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -396,6 +395,7 @@ impl Application for SpicyGarden {
                 running_state: RunningState::Waiting,
 
                 searched_seed_count: 0,
+                started_running_at: None,
             },
             iced::Command::none(),
         )
@@ -499,7 +499,17 @@ impl Application for SpicyGarden {
         if self.running_state == RunningState::Running {
             column = column
                 .push(Text::new(self.status_message.clone()))
-                .push(Text::new(format!("{} seeds searched so far.", self.searched_seed_count)))
+                .push(Text::new(format!("Seeds searched so far: {}", self.searched_seed_count)));
+            
+            if let Some(started_at) = self.started_running_at {
+                let running_duration: f32 = started_at.elapsed().as_secs() as f32;
+                let duration_hours: f32 = running_duration / (60.0 * 60.0);
+                let seeds_per_minute: f32 = (self.searched_seed_count as f32) / (running_duration / 60.0);
+
+                column = column
+                    .push(Text::new(format!("Seeds per minute: {:.2}", seeds_per_minute)))
+                    .push(Text::new(format!("Uptime: {:.2} hours", duration_hours)));
+            };
         };
 
         if self.running_state == RunningState::Quitting {
@@ -529,8 +539,10 @@ impl Application for SpicyGarden {
                     }
                 };
 
-                self.status_message = "Collecting data...".to_string();
+                self.status_message = format!("Collecting data with {} runners...", runner_count)
+                    .to_string();
                 self.running_state = RunningState::Running;
+                self.started_running_at = Some(Instant::now());
 
                 return iced::Command::perform(
                     seed_search_async_wrapper(server_address, client_key, runner_count),
@@ -571,6 +583,8 @@ impl Application for SpicyGarden {
 }
 
 fn main() {
+    println!("SpicyGarden by wilm0x42 commit {}", env!("GIT_HASH"));
+    
     // Define default initial values
 
     let mut flags = SpicyGardenFlags {
