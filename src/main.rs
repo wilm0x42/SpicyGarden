@@ -23,6 +23,9 @@ const JAVA_TIMEOUT_DURATION: Duration = Duration::from_secs(60);
 // All runners will shutdown gracefully when they see this set to true
 static JAVA_THREADS_SHUTDOWN: atomic::AtomicBool = atomic::AtomicBool::new(false);
 
+// Yeah that's right we're using a global variable to count how many seeds we complete, deal with it
+static JAVA_SEED_SEARCH_COUNT: atomic::AtomicU32 = atomic::AtomicU32::new(0);
+
 struct Seed {
     seed: String,
     claimed_runner_index: Option<u32>,
@@ -284,6 +287,9 @@ fn seed_search_loop(gather_server_address: String, client_key: String, target_ru
                         break;
                     }
                     println!("Sent result for seed: {:?}", seed.seed.clone());
+
+                    // Communicate the completed seed to the GUI
+                    JAVA_SEED_SEARCH_COUNT.fetch_add(1, atomic::Ordering::Relaxed);
                 }
                 Err(e) => {
                     println!("Unable to submit to seed server: {:?}", e);
@@ -343,12 +349,15 @@ struct SpicyGarden {
 
     status_message: String,
     running_state: RunningState,
+
+    searched_seed_count: u32,
 }
 
 #[derive(Debug, Clone)]
 enum Message {
     StartSeedSearch,
     StoppedSeedSearch,
+    SearchedSeedCountUpdated(u32),
     ServerAddressChanged(String),
     ClientKeyChanged(String),
     RunnerCountChanged(String),
@@ -385,6 +394,8 @@ impl Application for SpicyGarden {
 
                 status_message: "".to_string(),
                 running_state: RunningState::Waiting,
+
+                searched_seed_count: 0,
             },
             iced::Command::none(),
         )
@@ -395,13 +406,35 @@ impl Application for SpicyGarden {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        iced_native::subscription::events().map(|event| match event {
-            iced_native::Event::Window(window_event) => match window_event {
-                iced_native::window::Event::CloseRequested => Message::Quit,
+        let subscriptions: Vec<Subscription<Message>> = vec![
+            iced_native::subscription::events().map(|event| match event {
+                iced_native::Event::Window(window_event) => match window_event {
+                    iced_native::window::Event::CloseRequested => Message::Quit,
+                    _ => Message::IgnorableEvent,
+                },
                 _ => Message::IgnorableEvent,
-            },
-            _ => Message::IgnorableEvent,
-        })
+            }),
+            iced_native::subscription::unfold((), self.searched_seed_count.clone(), |known_seed_count| async move {
+                // NOTE: Because rust standard library doesn't have unbounded channels
+                // that would let me bring a reference of a mpsc Receiver into a
+                // closure like this, and I don't want to use Tokio, we're doing
+                // this funny caricature of a busy loop to watch for when the
+                // searched seed count updates.
+                // Ain't I a stinker?
+
+                thread::sleep(Duration::from_millis(100));
+
+                let current_seed_count: u32 = JAVA_SEED_SEARCH_COUNT.load(atomic::Ordering::Relaxed);
+
+                if current_seed_count != known_seed_count {
+                    return (Some(Message::SearchedSeedCountUpdated(current_seed_count)), current_seed_count);
+                };
+
+                (Some(Message::IgnorableEvent), known_seed_count)
+            }),
+        ];
+
+        Subscription::batch(subscriptions.into_iter())
     }
 
     fn view(&mut self) -> Element<Self::Message> {
@@ -464,7 +497,9 @@ impl Application for SpicyGarden {
         };
 
         if self.running_state == RunningState::Running {
-            column = column.push(Text::new(self.status_message.clone()))
+            column = column
+                .push(Text::new(self.status_message.clone()))
+                .push(Text::new(format!("{} seeds searched so far.", self.searched_seed_count)))
         };
 
         if self.running_state == RunningState::Quitting {
@@ -502,6 +537,12 @@ impl Application for SpicyGarden {
                     |_| Message::StoppedSeedSearch,
                 );
             }
+            Message::StoppedSeedSearch => {
+                self.running_state = RunningState::Quit;
+            }
+            Message::SearchedSeedCountUpdated(value) => {
+                self.searched_seed_count = value;
+            }
             Message::ServerAddressChanged(value) => {
                 self.server_address = value;
             }
@@ -510,9 +551,6 @@ impl Application for SpicyGarden {
             }
             Message::RunnerCountChanged(value) => {
                 self.runner_count = value;
-            }
-            Message::StoppedSeedSearch => {
-                self.running_state = RunningState::Quit;
             }
             Message::Quit => {
                 if self.running_state == RunningState::Running {
