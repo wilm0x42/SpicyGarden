@@ -129,7 +129,7 @@ impl Application for SpicyGarden {
 
     fn view(&mut self) -> Element<Self::Message> {
         let mut column =
-            Column::new().push(Row::new().push(Text::new("SpicyGarden by wilm0x42").size(32)));
+            Column::new().push(Row::new().push(Text::new("SpicyGarden by Wilm & Jesse").size(32)));
 
         if self.running_state == RunningState::Waiting {
             column = column
